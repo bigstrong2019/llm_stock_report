@@ -483,12 +483,15 @@ def main() -> int:
         )
         logger.info("Outputs written: %s", output_dir)
 
-        if not args.no_telegram:
+        import os
+        feishu_webhook = os.environ.get("FEISHU_WEBHOOK", "")
+        if feishu_webhook:
             send_report_to_feishu(
                 summary=summary_md,
                 details=details_md,
                 market=market,
                 date=asof_str,
+                webhook=feishu_webhook,
             )
 
         return 0 if status in {"success", "partial"} else 1
