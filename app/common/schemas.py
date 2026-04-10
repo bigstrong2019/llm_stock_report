@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -47,6 +46,15 @@ class StockNarrative:
     reliability_notes: list[str] = field(default_factory=list)
     latest_close: float | None = None
     feature_snapshot: dict[str, float] = field(default_factory=dict)
+    # ── 新增字段 ──────────────────────────────────────────────────
+    one_liner: str = ""                  # 一句话总结
+    valuation_analysis: str = ""         # 估值对比分析
+    fund_flow_analysis: str = ""         # 近一周资金面概况
+    risks: list[str] = field(default_factory=list)   # 利空消息
+    core_conclusion: str = ""            # 核心结论
+    fund_analysis: str = ""              # 详细资金面分析
+    news_analysis: str = ""              # 消息面分析
+    policy_analysis: str = ""            # 行业政策面分析
 
 
 @dataclass
@@ -56,6 +64,12 @@ class MarketNarrative:
     details: str
     used_provider: str
     news_items: list[NewsItem] = field(default_factory=list)
+    # ── 新增字段 ──────────────────────────────────────────────────
+    index_summary: str = ""                          # 各指数情况
+    top_gainers_sectors: list[str] = field(default_factory=list)   # 前10上涨板块
+    top_losers_sectors: list[str] = field(default_factory=list)    # 前10下跌板块
+    fund_flow: str = ""                              # 南向/北向资金
+    valuation: str = ""                              # 市场历史估值
 
 
 @dataclass
