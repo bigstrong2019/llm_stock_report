@@ -16,7 +16,11 @@ from app.data.history_store import get_or_update_symbol_history
 from app.data.normalize import normalize_symbol, parse_date
 from app.llm.base import LLMError
 from app.llm.factory import create_llm_client
-from app.llm.report_reasoner import generate_market_narrative, generate_stock_narrative
+from app.llm.report_reasoner import (
+    generate_market_narrative,
+    generate_stock_narrative,
+    generate_summary_narrative,
+)
 from app.model.predictor import build_predictions
 from app.model.qlib_data_builder import build_market_feature_frame, frame_window, save_debug_frames, split_train_predict_frame
 from app.model.registry import ModelBundle, load_latest_model, model_is_expired, save_model_bundle
@@ -25,16 +29,12 @@ from app.news.aggregator import build_stock_news_queries, search_news_with_fallb
 from app.report.market_overview import build_market_snapshot, market_news_query
 from app.report.renderer import (
     market_tag,
-    render_market_detail_telegram_card,
     render_market_detail_markdown,
-    render_summary_telegram_card,
     render_summary_markdown,
-    render_symbol_detail_telegram_card,
     render_symbol_detail_markdown,
     write_outputs,
 )
 from app.feishu_sender import send_report_to_feishu
-from app.report.telegram_sender import TelegramSender
 
 logger = logging.getLogger(__name__)
 
@@ -183,16 +183,18 @@ def _build_lookback_metrics(frame, lookback_days: int) -> dict[str, float]:
 
 
 def _send_failure_alert(cfg: AppConfig, market: str, asof_date: str, message: str) -> None:
-    sender = TelegramSender(
-        bot_token=cfg.telegram_bot_token or "",
-        chat_id=cfg.telegram_chat_id or "",
-        message_thread_id=cfg.telegram_message_thread_id,
-        limit=cfg.detail_message_char_limit,
-    )
-    if sender.enabled:
-        title = _failure_title(market, asof_date, cfg.report_language)
+    """失败告警，通过飞书发送"""
+    import os
+    feishu_webhook = os.environ.get("FEISHU_WEBHOOK", "")
+    if feishu_webhook:
         try:
-            sender.send_summary(title, message)
+            from app.feishu_sender import _send_card
+            _send_card(
+                title=f"❌ {market.upper()} {asof_date} 任务失败",
+                content_md=message,
+                webhook=feishu_webhook,
+                color="red",
+            )
         except Exception as exc:
             logger.error("Failure alert send failed: %s", exc)
 
@@ -276,11 +278,8 @@ def main() -> int:
 
         narratives: dict[str, StockNarrative] = {}
         detail_blocks: list[tuple[str, str]] = []
-        telegram_detail_blocks: list[tuple[str, str]] = []
 
-        # Keep rank order.
         sorted_predictions: list[PredictionRecord] = sorted(predictions, key=lambda x: x.rank)
-        case_pages_url = _build_case_pages_url(cfg, market, asof_str, report_language)
 
         for pred in sorted_predictions:
             symbol = pred.symbol
@@ -337,30 +336,14 @@ def main() -> int:
                 narrative=narrative,
                 language=report_language,
             )
-            detail_blocks.append(
-                (
-                    symbol,
-                    detail_markdown,
-                )
-            )
-            telegram_detail_blocks.append(
-                (
-                    symbol,
-                    render_symbol_detail_telegram_card(
-                        market=market,
-                        asof_date=asof_str,
-                        prediction=pred,
-                        narrative=narrative,
-                        language=report_language,
-                        pages_url=case_pages_url,
-                    ),
-                )
-            )
+            detail_blocks.append((symbol, detail_markdown))
 
         successful_predictions = [p for p in sorted_predictions if p.symbol in narratives]
-        market_summary_text: str | None = None
 
-        # Append one market-level overview after all symbol details.
+        # ── 大盘复盘 ──────────────────────────────────────────────
+        market_summary_text: str | None = None
+        market_narrative_obj = None
+
         market_snapshot = build_market_snapshot(
             market=market,
             market_data=market_data,
@@ -374,7 +357,7 @@ def main() -> int:
             max_results=6,
         )
         try:
-            market_narrative = generate_market_narrative(
+            market_narrative_obj = generate_market_narrative(
                 llm_client=llm_client,
                 market=market,
                 asof_date=asof_str,
@@ -383,40 +366,43 @@ def main() -> int:
                 provider_used=market_news_provider,
                 language=report_language,
             )
-            market_summary_text = market_narrative.summary
+            market_summary_text = market_narrative_obj.summary
             market_detail_markdown = render_market_detail_markdown(
                 market=market,
                 asof_date=asof_str,
                 market_snapshot=market_snapshot,
-                narrative=market_narrative,
+                narrative=market_narrative_obj,
                 language=report_language,
             )
-            detail_blocks.append(
-                (
-                    "MARKET",
-                    market_detail_markdown,
-                )
-            )
-            telegram_detail_blocks.append(
-                (
-                    "MARKET",
-                    render_market_detail_telegram_card(
-                        market=market,
-                        asof_date=asof_str,
-                        market_snapshot=market_snapshot,
-                        narrative=market_narrative,
-                        language=report_language,
-                        pages_url=case_pages_url,
-                    ),
-                )
-            )
+            detail_blocks.append(("MARKET", market_detail_markdown))
         except LLMError as exc:
-            if _is_en(report_language):
-                market_summary_text = f"{market.upper()} market recap generation failed: {exc}"
-            else:
-                market_summary_text = f"{market.upper()} 大盘复盘生成失败: {exc}"
+            market_summary_text = f"{market.upper()} 大盘复盘生成失败: {exc}"
             logger.warning("Skip market overview due to LLM failure: %s", exc)
 
+        # ── 汇总 LLM 调用（新增）────────────────────────────────────
+        # 把所有成功的股票结果整理成 stock_results 传给汇总提示词
+        stock_results_for_summary = []
+        for pred in successful_predictions:
+            narrative = narratives[pred.symbol]
+            stock_results_for_summary.append({
+                "symbol": pred.symbol,
+                "name": pred.symbol,          # 项目暂无股票名称字段，用代码代替
+                "decision": narrative.decision,
+                "trend": narrative.trend,
+                "confidence": narrative.confidence,
+                "one_liner": narrative.one_liner or narrative.summary,
+                "pred_return": pred.pred_return,
+            })
+
+        summary_data = generate_summary_narrative(
+            llm_client=llm_client,
+            market=market,
+            asof_date=asof_str,
+            stock_results=stock_results_for_summary,
+        )
+        logger.info("汇总卡片生成完成: overview=%s", summary_data.get("overview"))
+
+        # ── 写出 Markdown 输出文件 ────────────────────────────────
         summary_md = render_summary_markdown(
             market=market,
             asof_date=asof_str,
@@ -425,17 +411,6 @@ def main() -> int:
             failed_symbols=failed_symbols,
             market_summary=market_summary_text,
             language=report_language,
-        )
-        summary_telegram = render_summary_telegram_card(
-            market=market,
-            asof_date=asof_str,
-            predictions=successful_predictions,
-            narratives=narratives,
-            failed_symbols=failed_symbols,
-            market_summary=market_summary_text,
-            language=report_language,
-            pages_url=case_pages_url,
-            model_warning=model_warning,
         )
 
         details_md = "\n\n---\n\n".join([detail for _, detail in detail_blocks])
@@ -483,12 +458,15 @@ def main() -> int:
         )
         logger.info("Outputs written: %s", output_dir)
 
+        # ── 飞书推送 ──────────────────────────────────────────────
         import os
         feishu_webhook = os.environ.get("FEISHU_WEBHOOK", "")
-        if feishu_webhook:
+        if not args.no_telegram and feishu_webhook:
             send_report_to_feishu(
-                summary=summary_md,
-                details=details_md,
+                summary_data=summary_data,
+                narratives=narratives,
+                predictions=successful_predictions,
+                market_narrative=market_narrative_obj,
                 market=market,
                 date=asof_str,
                 webhook=feishu_webhook,
@@ -524,11 +502,7 @@ def main() -> int:
         output_dir = cfg.outputs_root / market / asof_str
         write_outputs(
             output_dir=output_dir,
-            summary_markdown=(
-                f"# [{market.upper()}] {asof_str} Daily Report Failed\n\n{exc}"
-                if _is_en(report_language)
-                else f"# [{market.upper()}] {asof_str} 日报失败\n\n{exc}"
-            ),
+            summary_markdown=f"# [{market.upper()}] {asof_str} 日报失败\n\n{exc}",
             details_markdown="",
             predictions=[],
             run_meta=failed_meta,
