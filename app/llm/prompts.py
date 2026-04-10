@@ -4,6 +4,8 @@ from app.common.decision_policy import baseline_decision, baseline_trend
 from app.common.schemas import NewsItem, PredictionRecord
 
 
+# ── 系统提示词 ────────────────────────────────────────────────────
+
 SYSTEM_PROMPT = (
     "你是一名严谨的中文股票策略研究员。"
     "你只能基于用户给出的结构化输入作答，禁止编造数据。"
@@ -25,6 +27,8 @@ def get_system_prompt(language: str = "zh") -> str:
     return SYSTEM_PROMPT_EN if (language or "").strip().lower() == "en" else SYSTEM_PROMPT
 
 
+# ── 股票分析提示词 ────────────────────────────────────────────────
+
 def build_stock_reasoning_prompt(
     market: str,
     symbol: str,
@@ -38,109 +42,26 @@ def build_stock_reasoning_prompt(
     quant_decision = baseline_decision(prediction)
     quant_trend = baseline_trend(prediction)
 
-    if language == "en":
-        decision_map = {
-            "买入": "Buy",
-            "观望": "Hold",
-            "减仓": "Trim",
-            "卖出": "Sell",
-            "卖出/观望": "Sell/Hold",
-        }
-        trend_map = {
-            "看多": "Bullish",
-            "震荡": "Sideways",
-            "看空": "Bearish",
-            "强烈看空": "Strong Bearish",
-        }
-        anchor_line = (
-            "Quant baseline action anchor: "
-            f"{decision_map.get(quant_decision, quant_decision)} / {trend_map.get(quant_trend, quant_trend)}. "
-            "Use it as the starting hypothesis from the model ranking. "
-            "Only downgrade to Hold or reverse it if technical or news evidence clearly contradicts the ranking."
-        )
-    else:
-        anchor_line = (
-            f"量化基线判断: {quant_decision} / {quant_trend}。"
-            "请把它当作模型排序给出的起点判断；只有当技术面或新闻证据明确冲突时，才下调到观望或反向结论。"
-        )
+    anchor_line = (
+        f"量化基线判断: {quant_decision} / {quant_trend}。"
+        "请把它当作模型排序给出的起点判断；只有当技术面或新闻证据明确冲突时，才下调到观望或反向结论。"
+    )
 
     ordered_features = sorted(feature_snapshot.items(), key=lambda x: x[0])
     feature_lines = [f"- {k}: {v:.6f}" for k, v in ordered_features]
-    feature_block = "\n".join(feature_lines) if feature_lines else (
-        "- no technical features available" if language == "en" else "- 无可用技术特征"
-    )
+    feature_block = "\n".join(feature_lines) if feature_lines else "- 无可用技术特征"
 
     news_lines = []
     for idx, item in enumerate(news_items[:4], start=1):
-        if language == "en":
-            news_lines.append(
-                f"[N{idx}] Title: {item.title}\n"
-                f"      Snippet: {item.snippet[:120]}\n"
-                f"      URL: {item.url}"
-            )
-        else:
-            news_lines.append(
-                f"[N{idx}] 标题: {item.title}\n"
-                f"      摘要: {item.snippet[:120]}\n"
-                f"      链接: {item.url}"
-            )
-
-    news_block = "\n".join(news_lines) if news_lines else ("No related news" if language == "en" else "无相关新闻")
-
-    if language == "en":
-        return f"""
-Generate an English equity brief from the inputs below. Keep it explainable, traceable, and conservative.
-
-Market: {market}
-Symbol: {symbol}
-Close: {latest_close:.4f}
-Predicted score (score): {prediction.score:.6f}
-Predicted return (pred_return): {prediction.pred_return:.6f}
-Rank: {prediction.rank}
-Long/short label (side): {prediction.side}
-{anchor_line}
-
-Technical snapshot:
-{feature_block}
-
-News evidence:
-{news_block}
-
-Output requirements (all required):
-1) summary <= 50 words, include directional view and uncertainty note
-2) details must cover:
-   - technical conclusion (cite at least 2 indicators)
-   - news conclusion (if no news, state "insufficient news evidence")
-   - risk control trigger or monitor points
-3) risk_points must be 2-4 concrete risks
-4) decision must be one of: Buy|Hold|Trim|Sell|Sell/Hold
-5) trend must be one of: Bullish|Sideways|Bearish|Strong Bearish
-6) urgency must be one of: High|Medium|Low
-7) catalysts must include 1-3 upside catalysts (can be empty)
-8) confidence must be an integer 0-100
-9) evidence_used only allows N1/N2... references from provided news; empty array if none
-10) reliability_notes should explain evidence/data reliability limits
-11) If earnings/guidance/results appear in news, prioritize them in details and catalysts
-12) Do not default to Hold only because uncertainty exists; the decision should still reflect the ranking side unless evidence clearly contradicts it
-
-Output JSON only:
-{{
-  "summary": "single sentence summary",
-  "details": "2-4 paragraph analysis",
-  "decision": "Buy|Hold|Trim|Sell|Sell/Hold",
-  "trend": "Bullish|Sideways|Bearish|Strong Bearish",
-  "urgency": "High|Medium|Low",
-  "risk_points": ["risk 1", "risk 2"],
-  "catalysts": ["catalyst 1", "catalyst 2"],
-  "action_bias": "Bullish|Neutral|Bearish",
-  "confidence": 66,
-  "evidence_used": ["N1", "N2"],
-  "reliability_notes": ["note 1", "note 2"]
-}}
-""".strip()
+        news_lines.append(
+            f"[N{idx}] 标题: {item.title}\n"
+            f"      摘要: {item.snippet[:120]}\n"
+            f"      链接: {item.url}"
+        )
+    news_block = "\n".join(news_lines) if news_lines else "无相关新闻"
 
     return f"""
-请基于以下输入生成中文研究简报，并遵守“可解释、可追溯、不过度结论”的原则。
+请基于以下输入生成中文股票研究简报，遵守"可解释、可追溯、不过度结论"的原则。
 
 市场: {market}
 股票: {symbol}
@@ -148,48 +69,56 @@ Output JSON only:
 预测分数(score): {prediction.score:.6f}
 预测收益(pred_return): {prediction.pred_return:.6f}
 排名: {prediction.rank}
-	多空标签(side): {prediction.side}
+多空标签(side): {prediction.side}
 {anchor_line}
 
-	技术面快照:
-	{feature_block}
+技术面快照:
+{feature_block}
 
 新闻证据:
 {news_block}
 
 输出要求（必须同时满足）：
-1) summary 不超过 50 字，包含方向判断与不确定性提示
-2) details 必须覆盖：
-   - 技术面结论（至少引用2个指标）
-   - 消息面结论（如无新闻需明确“新闻证据不足”）
-   - 风险控制（触发条件或观察点）
-3) risk_points 必须给出 2-4 条具体风险，不要写空泛句
-4) decision 必须是: 买入|观望|减仓|卖出|卖出/观望
-5) trend 必须是: 看多|震荡|看空|强烈看空
-6) urgency 必须是: 高|中|低
-7) catalysts 给出 1-3 条利好/催化点（可为空数组）
-8) confidence 为 0-100 的整数，体现当前结论可靠性
-9) evidence_used 只允许填 [N1], [N2] 这类已提供编号；无新闻则填空数组
-10) reliability_notes 给出数据可靠性说明（例如“仅技术面”“新闻时效不足”）
-11) 如果新闻中包含财报/业绩/指引信息，优先在 details 与 catalysts 中体现
-12) 不要因为“存在不确定性”就默认写成观望，decision 仍应反映当前排序方向，除非证据明确冲突
+1) one_liner：一句话总结，不超过30字，包含方向判断与不确定性提示
+2) valuation_analysis：与过去3年估值对比分析，2-3句话
+   必须在开头注明：【⚠️ 仅AI搜索分析，未拿到接口数据】
+   基于新闻和已知行业信息推断估值水位，若无依据需明确说明
+3) fund_flow_analysis：最近一周资金面概况，2-3句话
+   必须在开头注明：【⚠️ 仅AI搜索分析，未拿到接口数据】
+   可基于成交量特征（vol_ratio_lb）和新闻推断资金动向
+4) catalysts：利好消息，1-3条，必须来自新闻证据，不可凭空捏造；无证据则空数组
+5) risks：利空消息，1-3条，具体可追溯；不要写空泛句
+6) core_conclusion：核心结论，2-3句话，不超过100字
+7) fund_analysis：详细资金面分析，2-3句
+   必须在开头注明：【⚠️ 仅AI搜索分析，未拿到接口数据】
+8) news_analysis：消息面分析，2-3句，必须引用 N1/N2 等新闻编号
+   若无新闻需明确写"新闻证据不足，结论仅基于技术面"
+9) policy_analysis：所属行业政策面分析，2-3句
+   必须在开头注明：【⚠️ 仅AI搜索分析，未拿到接口数据】
+10) trend：必须是 看多|震荡|看空|强烈看空 之一
+11) decision：必须是 买入|观望|减仓|卖出|卖出/观望 之一
+    不要因为"存在不确定性"就默认写成观望，decision 仍应反映当前排序方向，除非证据明确冲突
+12) confidence：0-100的整数，体现当前结论可靠性
 
 仅输出 JSON，格式如下：
 {{
-  "summary": "一句话摘要，不超过50字",
-  "details": "2-4段详细分析，必须包含技术面+消息面+风险",
-  "decision": "买入|观望|减仓|卖出|卖出/观望",
-  "trend": "看多|震荡|看空|强烈看空",
-  "urgency": "高|中|低",
-  "risk_points": ["风险1", "风险2"],
-  "catalysts": ["催化1", "催化2"],
-  "action_bias": "偏多|中性|偏空",
-  "confidence": 66,
-  "evidence_used": ["N1", "N2"],
-  "reliability_notes": ["说明1", "说明2"]
+  "one_liner": "一句话总结不超过30字",
+  "valuation_analysis": "【⚠️ 仅AI搜索分析，未拿到接口数据】...",
+  "fund_flow_analysis": "【⚠️ 仅AI搜索分析，未拿到接口数据】...",
+  "catalysts": ["利好1", "利好2"],
+  "risks": ["利空1", "利空2"],
+  "core_conclusion": "核心结论2-3句",
+  "fund_analysis": "【⚠️ 仅AI搜索分析，未拿到接口数据】...",
+  "news_analysis": "消息面分析引用N1N2...",
+  "policy_analysis": "【⚠️ 仅AI搜索分析，未拿到接口数据】...",
+  "trend": "看多",
+  "decision": "买入",
+  "confidence": 72
 }}
 """.strip()
 
+
+# ── 大盘复盘提示词 ────────────────────────────────────────────────
 
 def build_market_reasoning_prompt(
     market: str,
@@ -199,111 +128,47 @@ def build_market_reasoning_prompt(
     language: str = "zh",
 ) -> str:
     language = (language or "zh").strip().lower()
+
     benchmark_lines: list[str] = []
     for item in market_snapshot.get("benchmarks", []):
         benchmark_lines.append(
-            (
-                f"- {item.get('name')}({item.get('ticker')}): "
-                f"close={float(item.get('latest_close', 0.0)):.2f}, "
-                f"1d={float(item.get('ret_1d', 0.0)):.4f}, "
-                f"5d={float(item.get('ret_5d', 0.0)):.4f}, "
-                f"ma20_ratio={float(item.get('ma20_ratio', 0.0)):.4f}"
-            )
+            f"- {item.get('name')}({item.get('ticker')}): "
+            f"收盘={float(item.get('latest_close', 0.0)):.2f}, "
+            f"1日涨跌={float(item.get('ret_1d', 0.0)) * 100:+.2f}%, "
+            f"5日涨跌={float(item.get('ret_5d', 0.0)) * 100:+.2f}%, "
+            f"MA20乖离={float(item.get('ma20_ratio', 0.0)):.4f}"
         )
-    benchmark_block = "\n".join(benchmark_lines) if benchmark_lines else (
-        "- no benchmark index data available" if language == "en" else "- 无可用基准指数数据"
+    benchmark_block = "\n".join(benchmark_lines) if benchmark_lines else "- 无可用基准指数数据"
+
+    breadth_block = (
+        f"样本数={int(market_snapshot.get('sample_size', 0))}, "
+        f"上涨={int(market_snapshot.get('up_count', 0))}, "
+        f"下跌={int(market_snapshot.get('down_count', 0))}, "
+        f"平盘={int(market_snapshot.get('flat_count', 0))}, "
+        f"均值涨跌={float(market_snapshot.get('avg_ret_1d', 0.0)) * 100:+.2f}%, "
+        f"中位涨跌={float(market_snapshot.get('median_ret_1d', 0.0)) * 100:+.2f}%"
     )
 
     gainers = market_snapshot.get("gainers", []) or []
     losers = market_snapshot.get("losers", []) or []
-    if language == "en":
-        breadth_block = (
-            f"sample={int(market_snapshot.get('sample_size', 0))}, "
-            f"up={int(market_snapshot.get('up_count', 0))}, "
-            f"down={int(market_snapshot.get('down_count', 0))}, "
-            f"flat={int(market_snapshot.get('flat_count', 0))}, "
-            f"avg_ret_1d={float(market_snapshot.get('avg_ret_1d', 0.0)):.4f}, "
-            f"median_ret_1d={float(market_snapshot.get('median_ret_1d', 0.0)):.4f}"
-        )
-    else:
-        breadth_block = (
-            f"样本数={int(market_snapshot.get('sample_size', 0))}, "
-            f"上涨={int(market_snapshot.get('up_count', 0))}, "
-            f"下跌={int(market_snapshot.get('down_count', 0))}, "
-            f"平盘={int(market_snapshot.get('flat_count', 0))}, "
-            f"均值涨跌={float(market_snapshot.get('avg_ret_1d', 0.0)):.4f}, "
-            f"中位涨跌={float(market_snapshot.get('median_ret_1d', 0.0)):.4f}"
-        )
     gainers_block = "\n".join(
-        [f"- {x.get('symbol')}: {float(x.get('ret_1d', 0.0)):.4f}" for x in gainers]
-    ) or ("- None" if language == "en" else "- 无")
+        [f"- {x.get('symbol')}: {float(x.get('ret_1d', 0.0)) * 100:+.2f}%" for x in gainers]
+    ) or "- 无"
     losers_block = "\n".join(
-        [f"- {x.get('symbol')}: {float(x.get('ret_1d', 0.0)):.4f}" for x in losers]
-    ) or ("- None" if language == "en" else "- 无")
+        [f"- {x.get('symbol')}: {float(x.get('ret_1d', 0.0)) * 100:+.2f}%" for x in losers]
+    ) or "- 无"
 
     news_lines = []
-    for idx, item in enumerate(news_items[:4], start=1):
-        if language == "en":
-            news_lines.append(
-                f"[N{idx}] Title: {item.title}\n"
-                f"      Snippet: {item.snippet[:120]}\n"
-                f"      URL: {item.url}"
-            )
-        else:
-            news_lines.append(
-                f"[N{idx}] 标题: {item.title}\n"
-                f"      摘要: {item.snippet[:120]}\n"
-                f"      链接: {item.url}"
-            )
-    news_block = "\n".join(news_lines) if news_lines else ("No related news" if language == "en" else "无相关新闻")
-
-    if language == "en":
-        return f"""
-Generate an English market recap for {market.upper()} from the inputs below. Keep it objective and traceable.
-
-Date: {asof_date}
-Market: {market}
-
-Benchmarks:
-{benchmark_block}
-
-Breadth:
-{breadth_block}
-
-Top gainers:
-{gainers_block}
-
-Top losers:
-{losers_block}
-
-News evidence:
-{news_block}
-
-Output requirements (all required):
-1) summary <= 70 words with market risk preference and uncertainty
-2) details must include:
-   - benchmark + breadth conclusions
-   - news impact and evidence boundary
-   - 2-3 next-session watchpoints
-3) risk_points: 2-4 concrete risks
-4) confidence: integer 0-100
-5) evidence_used: only N1/N2... references; empty array if none
-6) reliability_notes: reliability caveats
-
-Output JSON only:
-{{
-  "summary": "single sentence summary",
-  "details": "2-4 paragraph recap",
-  "risk_points": ["risk 1", "risk 2"],
-  "action_bias": "Bullish|Neutral|Bearish",
-  "confidence": 62,
-  "evidence_used": ["N1"],
-  "reliability_notes": ["note 1", "note 2"]
-}}
-""".strip()
+    for idx, item in enumerate(news_items[:6], start=1):
+        news_lines.append(
+            f"[N{idx}] 标题: {item.title}\n"
+            f"      摘要: {item.snippet[:120]}\n"
+            f"      链接: {item.url}"
+        )
+    news_block = "\n".join(news_lines) if news_lines else "无相关新闻"
 
     return f"""
-请基于以下输入生成{market.upper()}市场的大盘复盘，要求“客观、可追溯、不过度结论”。
+请基于以下输入生成{market.upper()}市场大盘复盘，要求"客观、可追溯、不过度结论"。
 
 日期: {asof_date}
 市场: {market}
@@ -314,34 +179,119 @@ Output JSON only:
 样本宽度:
 {breadth_block}
 
-样本领涨:
+样本领涨个股:
 {gainers_block}
 
-样本领跌:
+样本领跌个股:
 {losers_block}
 
 新闻证据:
 {news_block}
 
 输出要求（必须同时满足）：
-1) summary 不超过 70 字，给出市场风险偏好判断与不确定性
-2) details 必须包含：
-   - 指数/宽度两方面结论
-   - 新闻面影响与证据边界
-   - 次日观察点（2-3条）
-3) risk_points 必须给出 2-4 条具体风险
-4) confidence 为 0-100 的整数
-5) evidence_used 仅允许填 N1/N2...；无新闻则空数组
-6) reliability_notes 给出数据可靠性说明
+1) index_summary：各指数情况汇总，每个指数一行
+   格式示例：上证指数 +0.32% 收盘3280点
+   有几个指数写几行，数据来自基准指数输入
+2) top_gainers_sectors：前10上涨板块，基于样本领涨个股和新闻推断所属板块
+   数组第一条必须是：【⚠️ 仅AI推断，未拿到板块接口数据】
+   若无法推断则只保留该注明条目
+3) top_losers_sectors：前10下跌板块，基于样本领跌个股和新闻推断所属板块
+   数组第一条必须是：【⚠️ 仅AI推断，未拿到板块接口数据】
+   若无法推断则只保留该注明条目
+4) fund_flow：南向/北向资金动向分析，2-3句
+   必须在开头注明：【⚠️ 仅AI搜索分析，未拿到接口数据】
+   可基于新闻推断，若无依据需明确说明
+5) valuation：市场整体历史估值情况，2-3句
+   必须在开头注明：【⚠️ 仅AI搜索分析，未拿到接口数据】
+   可引用沪深300/标普500等常见估值区间做参考，若无依据需明确说明
+6) summary：整体一句话总结，不超过50字，包含市场风险偏好判断与不确定性提示
 
 仅输出 JSON，格式如下：
 {{
-  "summary": "一句话摘要，不超过70字",
-  "details": "2-4段大盘复盘",
-  "risk_points": ["风险1", "风险2"],
-  "action_bias": "偏多|中性|偏空",
-  "confidence": 62,
-  "evidence_used": ["N1"],
-  "reliability_notes": ["说明1", "说明2"]
+  "index_summary": "上证指数 +0.32% 收盘3280点\\n深证成指 -0.10% 收盘10200点",
+  "top_gainers_sectors": ["【⚠️ 仅AI推断，未拿到板块接口数据】", "新能源", "半导体"],
+  "top_losers_sectors": ["【⚠️ 仅AI推断，未拿到板块接口数据】", "房地产", "消费"],
+  "fund_flow": "【⚠️ 仅AI搜索分析，未拿到接口数据】...",
+  "valuation": "【⚠️ 仅AI搜索分析，未拿到接口数据】...",
+  "summary": "整体一句话总结不超过50字"
 }}
 """.strip()
+
+
+# ── 汇总提示词 ────────────────────────────────────────────────────
+
+def build_summary_prompt(
+    market: str,
+    asof_date: str,
+    stock_results: list[dict],
+) -> str:
+    """
+    stock_results 格式：
+    [
+      {
+        "symbol": "SZ300750",
+        "name": "宁德时代",
+        "decision": "买入",
+        "trend": "看多",
+        "confidence": 72,
+        "one_liner": "业绩超预期，技术面偏强",
+        "pred_return": 0.002266,
+      },
+      ...
+    ]
+    """
+    lines = []
+    for s in stock_results:
+        pred_return_pct = float(s.get("pred_return", 0.0)) * 100
+        lines.append(
+            f"{s.get('symbol')} | {s.get('name', '')} | "
+            f"{s.get('decision')} | {s.get('trend')} | "
+            f"置信度{s.get('confidence')}% | "
+            f"预测收益{pred_return_pct:+.2f}% | "
+            f"{s.get('one_liner', '')}"
+        )
+    stock_block = "\n".join(lines) if lines else "无股票数据"
+    total = len(stock_results)
+
+    return f"""
+你是一名严谨的中文股票策略研究员。
+基于以下今日所有股票的分析结果，生成投资组合汇总报告。
+禁止编造数据，所有结论必须来自以下输入。
+输出必须是严格 JSON，不包含 markdown 代码块。
+
+日期: {asof_date}
+市场: {market}
+股票总数: {total}
+
+今日股票分析结果:
+{stock_block}
+
+输出要求（必须同时满足）：
+1) overview：股票概览一句话
+   格式：共N只，X涨 Y跌 Z观望
+   A股习惯：涨用🔴，跌用🟢
+   美股/港股：涨用🟢，跌用🔴
+2) avg_change：所有股票预测收益的平均值，保留2位小数，带+/-符号
+   A股涨为🔴，跌为🟢；美股/港股涨为🟢，跌为🔴
+3) median_change：所有股票预测收益的中位数，保留2位小数，带+/-符号
+   emoji规则同上
+4) stock_list：每只股票一行简要总结，数组格式
+   每行格式：代码 股票名 决策emoji 一句话总结
+   A股决策emoji：买入=🔴 观望=⚪ 减仓/卖出=🟢
+   美股/港股决策emoji：买入=🟢 观望=⚪ 减仓/卖出=🔴
+5) top_pick：今日最值得关注的1只股票代码+名称及理由，1-2句话
+   必须从stock_list中选择，不可凭空捏造
+
+仅输出 JSON，格式如下：
+{{
+  "overview": "共3只，2涨🔴 1跌🟢",
+  "avg_change": "🔴 +1.23%",
+  "median_change": "🔴 +0.98%",
+  "stock_list": [
+    "300750 宁德时代 🔴买入 业绩超预期，技术面偏强",
+    "600519 贵州茅台 ⚪观望 估值偏高，等待回调"
+  ],
+  "top_pick": "今日最关注宁德时代(300750)，业绩超预期叠加资金流入信号明确。"
+}}
+""".strip()
+	
