@@ -33,6 +33,7 @@ from app.report.renderer import (
     render_symbol_detail_markdown,
     write_outputs,
 )
+from app.feishu_sender import send_report_to_feishu
 from app.report.telegram_sender import TelegramSender
 
 logger = logging.getLogger(__name__)
@@ -483,17 +484,11 @@ def main() -> int:
         logger.info("Outputs written: %s", output_dir)
 
         if not args.no_telegram:
-            sender = TelegramSender(
-                bot_token=cfg.telegram_bot_token or "",
-                chat_id=cfg.telegram_chat_id or "",
-                message_thread_id=cfg.telegram_message_thread_id,
-                limit=cfg.detail_message_char_limit,
-            )
-            sender.send_report(
-                summary_title=_summary_title(market, asof_str, report_language),
-                summary_content=summary_telegram,
-                market_tag=market_tag(market),
-                detail_blocks=telegram_detail_blocks,
+            send_report_to_feishu(
+                summary=summary_md,
+                details=details_md,
+                market=market,
+                date=asof_str,
             )
 
         return 0 if status in {"success", "partial"} else 1
