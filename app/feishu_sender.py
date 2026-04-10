@@ -117,7 +117,7 @@ def _should_skip(header_line: str) -> bool:
 def _filter_sections(text: str) -> str:
     """按段落标题过滤掉冗余内容"""
     # 在每个段落标题前插入分隔符方便切割
-    sections = re.split(r"(?=\n#{1,3} )", "\n" + text)
+    sections = re.split(r"(?=\n## )", "\n" + text)
     kept = []
     for sec in sections:
         lines = sec.strip().splitlines()
@@ -137,7 +137,7 @@ def _split_stocks_and_market(details: str) -> tuple[list[tuple[str, str]], Optio
     - stocks: [(股票标题, 内容), ...]
     - market_block: (标题, 内容) 或 None
     """
-    parts = re.split(r"(?=\n# |\n## )", "\n" + details)
+    parts = re.split(r"(?=\n# )", "\n" + details)
     stocks = []
     market_block = None
 
