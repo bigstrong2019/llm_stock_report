@@ -1,5 +1,17 @@
 [
   {
+    "id": "cn-2026-06-25",
+    "market": "cn",
+    "date": "2026-06-25",
+    "title": "[CN] 2026-06-25 Daily Case",
+    "path": "cases/cn/2026-06-25.md",
+    "summary_line": "> [CN] 共分析 1 只股票 | 🟢买入:1 🟡观望:0 🟠减仓:0 🔴卖出:0",
+    "status": "success",
+    "success_symbols": 1,
+    "total_symbols": 1,
+    "updated_at": "2026-06-25T10:41:16+00:00"
+  },
+  {
     "id": "cn-2026-06-24",
     "market": "cn",
     "date": "2026-06-24",
